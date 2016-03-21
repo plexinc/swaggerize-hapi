@@ -4,6 +4,7 @@ var Test = require('tape');
 var Path = require('path');
 var Swaggerize = require('../lib');
 var Hapi = require('hapi');
+var StubAuthTokenScheme = require('./fixtures/lib/stub-auth-token-scheme');
 
 Test('test', function (t) {
     var server;
@@ -19,7 +20,7 @@ Test('test', function (t) {
             register: Swaggerize,
             options: {
                 api: Path.join(__dirname, './fixtures/defs/pets.json'),
-                handlers: Path.join(__dirname, './fixtures/handlers'),
+                handlers: Path.join(__dirname, './fixtures/handlers')
             }
         }, function (err) {
             t.error(err, 'No error.');
@@ -115,30 +116,173 @@ Test('test', function (t) {
 
     });
 
-    t.test('validation', function (t) {
-        t.test('query', function(t) {
-            var queryStringToStatusCode = {
-                'limit=2': 200,
-                'tags=some_tag&tags=some_other_tag': 200,
-                'limit=2&tags=some_tag&tags=some_other_tag': 200,
-                'limit=a_string': 400,
-                'unspecified_parameter=value': 400
+    t.test('query validation', function (t) {
+        var queryStringToStatusCode = {
+            'limit=2': 200,
+            'tags=some_tag&tags=some_other_tag': 200,
+            'limit=2&tags=some_tag&tags=some_other_tag': 200,
+            'limit=a_string': 400
+        }
+
+        t.plan(Object.keys(queryStringToStatusCode).length);
+
+        for (var queryString in queryStringToStatusCode) {
+            (function(queryString, expectedStatusCode) {
+                server.inject({
+                    method: 'GET',
+                    url: '/v1/petstore/pets?' + queryString
+                }, function (response) {
+                    t.strictEqual(response.statusCode, expectedStatusCode, queryString);
+                });
+            })(queryString, queryStringToStatusCode[queryString]);
+        }
+    });
+
+});
+
+Test('authentication', function (t) {
+    var server;
+
+    var buildValidateFunc = function (allowedToken) {
+        return function (token, callback) {
+            if (token === allowedToken) {
+                return callback(null, true, {});
             }
 
-            t.plan(Object.keys(queryStringToStatusCode).length);
+            callback(null, false);
+        }
+    };
 
-            for (var queryString in queryStringToStatusCode) {
-                (function(queryString, expectedStatusCode) {
+    t.test('token authentication', function (t) {
+        t.plan(5);
+
+        server = new Hapi.Server();
+
+        server.connection({});
+
+        server.register({ register: StubAuthTokenScheme }, function (err) {
+            t.error(err, 'No error.');
+
+            server.auth.strategy('api_key', 'stub-auth-token', {
+                validateFunc: buildValidateFunc('12345')
+            });
+            server.auth.strategy('api_key2', 'stub-auth-token', {
+                validateFunc: buildValidateFunc('98765')
+            });
+
+            server.register({
+                register: Swaggerize,
+                options: {
+                    api: require('./fixtures/defs/pets_authed.json'),
+                    handlers: Path.join(__dirname, './fixtures/handlers'),
+                }
+            }, function (err) {
+                t.error(err, 'No error.');
+
+                server.inject({
+                    method: 'GET',
+                    url: '/v1/petstore/pets'
+                }, function (response) {
+                    t.strictEqual(response.statusCode, 401, '401 status (unauthorized).');
+
                     server.inject({
                         method: 'GET',
-                        url: '/v1/petstore/pets?' + queryString
+                        url: '/v1/petstore/pets',
+                        headers: { authorization: '12345' }
                     }, function (response) {
-                        t.strictEqual(response.statusCode, expectedStatusCode, queryString);
+                        t.strictEqual(response.statusCode, 200, 'OK status.');
+
+                        server.inject({
+                            method: 'GET',
+                            url: '/v1/petstore/pets',
+                            headers: { authorization: '98765' }
+                        }, function (response) {
+                            t.strictEqual(response.statusCode, 200, 'OK status.');
+                        });
                     });
-                })(queryString, queryStringToStatusCode[queryString]);
+                });
+            });
+        });
+    });
+});
+
+Test('form data', function (t) {
+    var server;
+
+    t.test('success', function (t) {
+        t.plan(2);
+
+        server = new Hapi.Server();
+
+        server.connection({});
+
+        server.register({
+            register: Swaggerize,
+            options: {
+                api: Path.join(__dirname, './fixtures/defs/pets.json'),
+                handlers: {
+                    upload: {
+                        $post: function (req, reply) {
+                            reply();
+                        }
+                    }
+                }
             }
+        }, function (err) {
+            t.error(err, 'No error.');
+        });
+
+        server.inject({
+            method: 'POST',
+            url: '/v1/petstore/upload',
+            headers: {
+                'content-type': 'application/x-www-form-urlencoded'
+            },
+            payload: 'name=thing&upload=asdf'
+        }, function (response) {
+            t.strictEqual(response.statusCode, 200, 'OK status.');
         });
     });
 
+    t.test('bad content type', function (t) {
+        t.plan(1);
 
+        server.inject({
+            method: 'POST',
+            url: '/v1/petstore/upload',
+            payload: 'name=thing&upload=asdf'
+        }, function (response) {
+            t.strictEqual(response.statusCode, 400, '400 status.');
+        });
+    });
+});
+
+Test('yaml', function (t) {
+    t.test('yaml', function (t) {
+        t.plan(4);
+
+        var server = new Hapi.Server();
+
+        server.connection({});
+
+        server.register({
+            register: Swaggerize,
+            options: {
+                api: Path.join(__dirname, './fixtures/defs/pets.yaml'),
+                handlers: Path.join(__dirname, './fixtures/handlers')
+            }
+        }, function (err) {
+            t.error(err, 'No error.');
+            t.ok(server.plugins.swagger.api, 'server.plugins.swagger.api exists.');
+            t.ok(server.plugins.swagger.setHost, 'server.plugins.swagger.setHost exists.');
+        });
+
+        server.inject({
+            method: 'GET',
+            url: '/v1/petstore/pets'
+        }, function (response) {
+            t.strictEqual(response.statusCode, 200, 'OK status.');
+        });
+
+    });
 });
