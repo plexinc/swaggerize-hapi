@@ -188,7 +188,10 @@ Test('authentication', function (t) {
                     server.inject({
                         method: 'GET',
                         url: '/v1/petstore/pets',
-                        headers: { authorization: '12345' }
+                        headers: {
+                            authorization: '12345',
+                            'custom-header': 'Hello'
+                        }
                     }, function (response) {
                         t.strictEqual(response.statusCode, 200, 'OK status.');
 
@@ -210,7 +213,7 @@ Test('form data', function (t) {
     var server;
 
     t.test('success', function (t) {
-        t.plan(2);
+        t.plan(3);
 
         server = new Hapi.Server();
 
@@ -223,6 +226,7 @@ Test('form data', function (t) {
                 handlers: {
                     upload: {
                         $post: function (req, reply) {
+                            t.strictEqual(typeof req.payload, 'object');
                             reply();
                         }
                     }
@@ -238,7 +242,7 @@ Test('form data', function (t) {
             headers: {
                 'content-type': 'application/x-www-form-urlencoded'
             },
-            payload: 'name=thing&upload=asdf'
+            payload: 'name=thing&upload=data'
         }, function (response) {
             t.strictEqual(response.statusCode, 200, 'OK status.');
         });
@@ -250,7 +254,22 @@ Test('form data', function (t) {
         server.inject({
             method: 'POST',
             url: '/v1/petstore/upload',
-            payload: 'name=thing&upload=asdf'
+            payload: 'name=thing&upload=data'
+        }, function (response) {
+            t.strictEqual(response.statusCode, 400, '400 status.');
+        });
+    });
+
+    t.test('invalid payload', function (t) {
+        t.plan(1);
+
+        server.inject({
+            method: 'POST',
+            url: '/v1/petstore/upload',
+            headers: {
+                'content-type': 'application/x-www-form-urlencoded'
+            },
+            payload: 'name=thing&upload='
         }, function (response) {
             t.strictEqual(response.statusCode, 400, '400 status.');
         });
